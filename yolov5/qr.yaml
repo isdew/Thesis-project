@@ -1,6 +1,0 @@
-# qr.yaml
-train: C:\Users\User\Downloads\capstone\dataset\images\train
-val: C:\Users\User\Downloads\capstone\dataset\images\train  # just reuse train for validation (since no val folder)
-
-nc: 1
-names: ['qr']
