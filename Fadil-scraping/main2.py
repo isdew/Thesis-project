@@ -11,7 +11,7 @@ import json
 from bs4 import BeautifulSoup
 
 # Setup Chrome WebDriver with profile
-CHROME_DRIVER_PATH = "/Users/fadil/Downloads/chromedriver-mac-arm642/chromedriver"
+CHROME_DRIVER_PATH = "/Users/fadil/Downloads/chromedriver-mac/chromedriver"
 PROGRESS_FILE = "fb_crawler_progress.json"
 OUTPUT_FILE = "facebook_powerbank_all_data3.csv"
 

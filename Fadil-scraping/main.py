@@ -14,7 +14,7 @@ import gspread
 
 
 # --- SETUP SELENIUM ---
-chrome_driver_path = "/Users/fadil/Downloads/chromedriver-mac-arm642/chromedriver"
+chrome_driver_path = "/Users/fadil/Downloads/chromedriver-mac/chromedriver"
 chrome_options = Options()
 chrome_options.add_argument("--user-data-dir=/Users/fadil/Library/Application Support/Google/Chrome")
 chrome_options.add_argument("--profile-directory=Default")
