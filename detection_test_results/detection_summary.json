@@ -1,0 +1,10 @@
+{
+  "total_images": 266,
+  "images_with_tis": 255,
+  "images_with_qr": 36,
+  "images_with_both": 36,
+  "images_no_detection": 11,
+  "total_tis_detections": 327,
+  "total_qr_detections": 36,
+  "failed_images": 0
+}

@@ -1,4 +1,23 @@
-# Integrated Facebook Marketplace Scraper with QR and TIS Symbol Detection
+def check_requirements():
+    """Check if all required packages are installed"""
+    required_packages = [
+        'ultralytics', 'selenium', 'beautifulsoup4', 'opencv-python', 
+        'pyzbar', 'requests', 'torch', 'numpy', 'webdriver-manager',
+        'psutil', 'pillow'
+    ]
+    
+    missing_packages = []
+    
+    for package in required_packages:
+        try:
+            if package == 'opencv-python':
+                import cv2
+            elif package == 'beautifulsoup4':
+                import bs4
+            elif package == 'webdriver-manager':
+                from webdriver_manager.firefox import GeckoDriverManager
+            elif package == 'pillow':
+                from PIL# Integrated Facebook Marketplace Scraper with QR and TIS Symbol Detection
 # Clean version without syntax errors
 
 import os
@@ -69,6 +88,116 @@ class Config:
     DOWNLOAD_IMAGES = True
     ENABLE_TIS_DETECTION = True
     ENABLE_QR_DETECTION = True
+
+# ======================== VALIDATION FUNCTIONS ========================
+def validate_network_connection():
+    """ตรวจสอบการเชื่อมต่อเครือข่ายกับ Facebook"""
+    try:
+        logging.info("🌐 Testing network connection to Facebook...")
+        response = requests.get("https://www.facebook.com/favicon.ico", timeout=10)
+        if response.status_code == 200:
+            logging.info("✅ Network connection OK")
+            return True
+        else:
+            logging.error(f"❌ Network test failed: HTTP {response.status_code}")
+            return False
+    except Exception as e:
+        logging.error(f"❌ Network connection failed: {e}")
+        return False
+
+def check_disk_space():
+    """ตรวจสอบพื้นที่ดิสก์"""
+    try:
+        disk_usage = psutil.disk_usage(Config.RESULTS_DIR)
+        free_gb = disk_usage.free / (1024**3)
+        
+        if free_gb < 1.0:
+            logging.error(f"❌ Low disk space: {free_gb:.2f}GB remaining")
+            return False
+        else:
+            logging.info(f"✅ Disk space OK: {free_gb:.2f}GB available")
+            return True
+    except Exception as e:
+        logging.error(f"❌ Could not check disk space: {e}")
+        return False
+
+def validate_runtime_config():
+    """ตรวจสอบการตั้งค่าก่อนรัน"""
+    errors = []
+    
+    if not Config.DOWNLOAD_IMAGES:
+        errors.append("DOWNLOAD_IMAGES is False - no images will be saved")
+    
+    if not os.path.exists(Config.RESULTS_DIR):
+        try:
+            os.makedirs(Config.RESULTS_DIR, exist_ok=True)
+        except:
+            errors.append(f"Cannot create results directory: {Config.RESULTS_DIR}")
+    
+    if not os.access(Config.RESULTS_DIR, os.W_OK):
+        errors.append(f"Cannot write to directory: {Config.RESULTS_DIR}")
+    
+    if errors:
+        for error in errors:
+            logging.error(f"❌ Config error: {error}")
+        return False
+    
+    logging.info("✅ Runtime configuration validated")
+    return True
+
+def download_image_safely(url, temp_filename):
+    """ดาวน์โหลดรูปภาพอย่างปลอดภัยพร้อม validation"""
+    try:
+        logging.info(f"📥 Downloading: {url}")
+        
+        # ใช้ requests แทน wget
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, stream=True, timeout=30)
+        
+        if response.status_code != 200:
+            logging.error(f"❌ HTTP {response.status_code} for {url}")
+            return False, f"HTTP {response.status_code}"
+        
+        # เขียนไฟล์
+        with open(temp_filename, 'wb') as f:
+            shutil.copyfileobj(response.raw, f)
+        
+        # ตรวจสอบไฟล์หลัง download
+        if not os.path.exists(temp_filename):
+            logging.error(f"❌ File not created: {temp_filename}")
+            return False, "File not created"
+        
+        file_size = os.path.getsize(temp_filename)
+        if file_size < 1000:  # น้อยกว่า 1KB
+            logging.error(f"❌ File too small ({file_size} bytes): {temp_filename}")
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+            return False, f"File too small ({file_size} bytes)"
+        
+        # ตรวจสอบว่าเป็นรูปจริงหรือไม่
+        try:
+            with Image.open(temp_filename) as img:
+                img.verify()  # ตรวจสอบ format
+                logging.info(f"✅ Valid image downloaded: {file_size} bytes")
+                return True, "Success"
+        except Exception as e:
+            logging.error(f"❌ Invalid image file: {temp_filename} - {e}")
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+            return False, f"Invalid image: {e}"
+            
+    except requests.exceptions.Timeout:
+        logging.error(f"❌ Download timeout for {url}")
+        return False, "Timeout"
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Download failed for {url}: {e}")
+        return False, f"Request failed: {e}"
+    except Exception as e:
+        logging.error(f"❌ Unexpected error downloading {url}: {e}")
+        return False, f"Unexpected error: {e}"
 
 # ======================== DETECTION MODULES ========================
 class TISDetector:
@@ -550,7 +679,9 @@ class EnhancedMarketplaceScraper:
             return set(), set()
     
     def scrape_post_with_detection(self, driver, post_url):
-        """Enhanced post scraping with integrated detection"""
+        """Enhanced post scraping with integrated detection and early stop"""
+        logging.info(f"🔍 Processing post: {post_url}")
+        
         driver.get(post_url)
         time.sleep(3)
 
@@ -568,7 +699,7 @@ class EnhancedMarketplaceScraper:
             title = title_elem.text.strip()
             logging.info(f"📌 Title: {title}")
         except:
-            logging.warning("⚠ Title not found.")
+            logging.warning("⚠ Title not found, skipping post")
             return
 
         safe_title = self.sanitize_filename(title)
@@ -586,6 +717,13 @@ class EnhancedMarketplaceScraper:
             "contains(@class, 'x5pf9jr') and contains(@class, 'xo71vjh')]"
         )
 
+        total_images = len(img_elements)
+        if total_images == 0:
+            logging.warning("⚠ No images found in post")
+            return
+
+        logging.info(f"📸 Found {total_images} images in post")
+        
         matched_urls = []
         all_detection_results = []
         post_detection_summary = {
@@ -595,22 +733,54 @@ class EnhancedMarketplaceScraper:
             'qr_count': 0,
             'total_qr_data': []
         }
+        
+        # Early stop tracking
+        failed_downloads = 0
+        successful_downloads = 0
+        max_failures = min(3, max(1, total_images // 2))  # หยุดถ้า fail > 50% หรือ 3 รูป
 
         for idx, img in enumerate(img_elements):
             url = img.get_attribute("src")
             if not url:
+                logging.warning(f"⚠ Image {idx+1}: No src attribute")
+                failed_downloads += 1
                 continue
                 
             matched_urls.append(url)
-            logging.info(f"✅ Processing Image {idx+1}: {url}")
+            logging.info(f"🔄 Processing Image {idx+1}/{total_images}")
             
-            # Download image temporarily for detection
+            # Generate temp filename
             temp_filename = os.path.join(Config.IMAGE_DIR, f"temp_{safe_title}_{idx}_{int(time.time())}.jpg")
             
-            try:
-                wget.download(url, temp_filename, bar=None)
+            # Download with enhanced error handling
+            download_success, error_msg = download_image_safely(url, temp_filename)
+            
+            if not download_success:
+                logging.error(f"❌ Image {idx+1} download failed: {error_msg}")
+                failed_downloads += 1
                 
-                # Perform integrated detection
+                # Early stop check
+                if failed_downloads >= max_failures:
+                    logging.error(f"⏹️  TOO MANY DOWNLOAD FAILURES ({failed_downloads}/{idx+1})")
+                    logging.error(f"⏹️  STOPPING POST PROCESSING TO SAVE TIME")
+                    logging.error(f"⏹️  Post: {post_url}")
+                    
+                    # Clean up any temp files
+                    for temp_file in os.listdir(Config.IMAGE_DIR):
+                        if temp_file.startswith(f"temp_{safe_title}"):
+                            try:
+                                os.remove(os.path.join(Config.IMAGE_DIR, temp_file))
+                            except:
+                                pass
+                    return
+                
+                continue
+            
+            successful_downloads += 1
+            logging.info(f"✅ Image {idx+1} downloaded successfully")
+            
+            # Perform integrated detection
+            try:
                 detection_results = self.detector.analyze_image(temp_filename)
                 all_detection_results.append(detection_results)
                 
@@ -624,23 +794,41 @@ class EnhancedMarketplaceScraper:
                     post_detection_summary['qr_count'] += detection_results['qr_count']
                     post_detection_summary['total_qr_data'].extend(detection_results['qr_data'])
                 
-                # Organize and save image if needed
-                if Config.DOWNLOAD_IMAGES:
-                    permanent_filename = os.path.join(Config.IMAGE_DIR, f"{safe_title}_{idx}_{int(time.time())}.jpg")
-                    shutil.move(temp_filename, permanent_filename)
-                    self.organize_image_by_detection(permanent_filename, detection_results)
-                else:
-                    os.remove(temp_filename)
-                
                 logging.info(f"🔍 Image {idx+1} Analysis - TIS: {'✅' if detection_results['tis_detected'] else '❌'}, "
                            f"QR: {'✅' if detection_results['qr_detected'] else '❌'}")
                 
             except Exception as e:
-                logging.error(f"❌ Failed to process image {idx+1}: {e}")
-                if os.path.exists(temp_filename):
+                logging.error(f"❌ Detection failed for image {idx+1}: {e}")
+                detection_results = {
+                    'tis_detected': False, 'tis_count': 0,
+                    'qr_detected': False, 'qr_count': 0, 'qr_data': []
+                }
+            
+            # Organize and save image if needed
+            if Config.DOWNLOAD_IMAGES:
+                try:
+                    permanent_filename = os.path.join(Config.IMAGE_DIR, f"{safe_title}_{idx}_{int(time.time())}.jpg")
+                    shutil.move(temp_filename, permanent_filename)
+                    self.organize_image_by_detection(permanent_filename, detection_results)
+                    logging.info(f"📁 Image {idx+1} organized successfully")
+                except Exception as e:
+                    logging.error(f"❌ Failed to organize image {idx+1}: {e}")
+            else:
+                # ลบไฟล์ temp หากไม่ต้องการเก็บ
+                try:
                     os.remove(temp_filename)
+                except:
+                    pass
             
             time.sleep(random.uniform(1, 2))
+
+        # Final validation
+        if successful_downloads == 0:
+            logging.error(f"❌ NO IMAGES DOWNLOADED from post: {post_url}")
+            return
+            
+        logging.info(f"📊 Post Summary - Downloads: {successful_downloads}/{total_images}, "
+                    f"Failures: {failed_downloads}")
 
         # Save comprehensive results
         if matched_urls:
@@ -655,23 +843,24 @@ class EnhancedMarketplaceScraper:
                 "Yes" if post_detection_summary['qr_detected'] else "No",
                 post_detection_summary['qr_count'],
                 qr_data_str,
-                len(matched_urls)
+                successful_downloads,
+                failed_downloads
             ]
             
             header = [
                 "Title", "Post Link", "Photo Links", "TIS Detected", "TIS Count",
-                "QR Detected", "QR Count", "QR Data", "Total Images"
+                "QR Detected", "QR Count", "QR Data", "Successful Downloads", "Failed Downloads"
             ]
             
             self.save_csv_row(Config.CSV_FILE, row, header=header)
             
-            logging.info(f"✅ Saved comprehensive results for: {title}")
+            logging.info(f"✅ Saved results for: {title}")
             logging.info(f"   📊 TIS: {'Yes' if post_detection_summary['tis_detected'] else 'No'} "
                         f"(Count: {post_detection_summary['tis_count']})")
             logging.info(f"   📱 QR: {'Yes' if post_detection_summary['qr_detected'] else 'No'} "
                         f"(Count: {post_detection_summary['qr_count']})")
         else:
-            logging.warning("⚠ No images found for analysis.")
+            logging.warning("⚠ No images processed for analysis.")
     
     def run_integrated_scraping(self):
         """Main method to run integrated scraping with detection"""
@@ -783,7 +972,8 @@ def check_requirements():
     """Check if all required packages are installed"""
     required_packages = [
         'ultralytics', 'selenium', 'beautifulsoup4', 'opencv-python', 
-        'pyzbar', 'wget', 'requests', 'torch', 'numpy', 'webdriver-manager'
+        'pyzbar', 'requests', 'torch', 'numpy', 'webdriver-manager',
+        'psutil', 'pillow'
     ]
     
     missing_packages = []
@@ -796,6 +986,8 @@ def check_requirements():
                 import bs4
             elif package == 'webdriver-manager':
                 from webdriver_manager.firefox import GeckoDriverManager
+            elif package == 'pillow':
+                from PIL import Image
             else:
                 __import__(package.replace('-', '_'))
         except ImportError:
@@ -957,7 +1149,7 @@ if __name__ == "__main__":
     except ImportError as e:
         print(f"❌ Import error: {e}")
         print("💡 Make sure all required packages are installed:")
-        print("pip install ultralytics selenium beautifulsoup4 opencv-python pyzbar wget requests torch numpy webdriver-manager")
+        print("pip install ultralytics selenium beautifulsoup4 opencv-python pyzbar requests torch numpy webdriver-manager psutil pillow")
         print("💡 And make sure Firefox is installed: brew install firefox")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
