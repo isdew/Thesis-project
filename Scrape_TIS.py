@@ -1,4 +1,3 @@
-#branch: restructure-cleanup
 import os
 import time
 import random
@@ -7,10 +6,12 @@ import re
 import unicodedata
 import logging
 import requests
+import tempfile
 import shutil
 import wget
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -20,14 +21,16 @@ from ultralytics import YOLO
 
 # Load YOLOv11 model (replace with your correct path)
 TIS_model = YOLO(r"model\TIS.pt")
-QR_model = YOLO(r"model\QR.pt")
 
 
 # ------------------------ CONFIG ------------------------
 KEYWORDS = [
-    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-    "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
+    "Power bank", "พาวเวอร์แบงค์"
 ]
+# KEYWORDS = [
+#     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
+#     "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
+# ]
 #["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง","powerbank", "eloop", "แบตเตอรี่สำรอง"]
 FILTER_KEYWORDS = [
     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
@@ -37,12 +40,10 @@ FILTER_KEYWORDS = [
 #k.lower() for k in KEYWORDS
 
 download_images = True  # Toggle this to True to download images
-TIS_cf_threshold = 0.5  # Confidence threshold for TIS detection
-QR_cf_threshold = 0.5  # Confidence threshold for QR detection
 CSV_FILE = "Scrape_Data/marketplace_data.csv"
 SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
 IMAGE_DIR = "Scrape_Data/images"
-SCROLL_LIMIT = 15
+SCROLL_LIMIT = 3 #15
 ZOOM_LEVEL = 0.5
 PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project"
 PROFILE_NAME = "Profile 8"
@@ -70,7 +71,7 @@ def setup_chrome():
 
 # ------------------------ HELPERS ------------------------
 def detect_tis_symbol(image_path):
-    results = TIS_model.predict(image_path, conf=TIS_cf_threshold)  # Confidence threshold for TIS detection)  # Confidence threshold adjust if needed
+    results = TIS_model.predict(image_path, conf=0.5)  # Confidence threshold adjust if needed
     detections = results[0].boxes.xyxy  # Bounding boxes format (x1, y1, x2, y2)
     
     if len(detections) > 0:
@@ -79,17 +80,6 @@ def detect_tis_symbol(image_path):
     else:
         logging.info(f"❌ No TIS symbol detected in {image_path}")
         return False
-    
-def detect_qr_symbol(image_path):
-    results = QR_model.predict(image_path, conf=QR_cf_threshold)
-    detections = results[0].boxes.xyxy
-    if len(detections) > 0:
-        logging.info(f"📷 QR code detected in {image_path}")
-        return True
-    else:
-        logging.info(f"❌ No QR code detected in {image_path}")
-        return False
-
 
 def save_csv_row(filename, row, header=None):
     file_exists = os.path.exists(filename)
@@ -190,7 +180,6 @@ def scrape_post(driver, post_url):
 
     matched_urls = []
     tis_detection_results = []
-    qr_detection_results = []
 
     for img in img_elements:
         url = img.get_attribute("src")
@@ -205,13 +194,6 @@ def scrape_post(driver, post_url):
             # 🛠 Detect TIS symbol
             tis_found = detect_tis_symbol(temp_filename)
             tis_detection_results.append(tis_found)
-
-            qr_found = detect_qr_symbol(temp_filename)
-            qr_detection_results.append(qr_found)
-
-            tis_detected = any(tis_detection_results)
-            qr_detected = any(qr_detection_results)
-
             
             # 📦 If user wants to save images permanently
             if download_images:
@@ -229,11 +211,8 @@ def scrape_post(driver, post_url):
     tis_detected = any(tis_detection_results)
 
     if matched_urls:
-        row = [title, post_url, " | ".join(matched_urls), 
-       "Yes" if tis_detected else "No", 
-       "Yes" if qr_detected else "No"]
-        save_csv_row(CSV_FILE, row, header=["Title", "Post Link", "Photo Link", "TIS Detected", "QR Detected"])
-
+        row = [title, post_url, " | ".join(matched_urls), "Yes" if tis_detected else "No"]
+        save_csv_row(CSV_FILE, row, header=["Title", "Post Link", "Photo Link", "TIS Detected"])
         logging.info(f"✅ Saved to CSV: {title} (TIS Detected: {'Yes' if tis_detected else 'No'})")
     else:
         logging.warning("⚠ No images found.")
@@ -245,7 +224,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("New_Scaping/scraper_log.txt", mode='w', encoding="utf-8"),
+            logging.FileHandler("scraper_log.txt", mode='w', encoding="utf-8"),
             logging.StreamHandler()  # Console output
         ]
     )

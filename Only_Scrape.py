@@ -18,10 +18,11 @@ from collections import defaultdict
 
 # ------------------------ CONFIG ------------------------
 KEYWORDS = [
-    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-    "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
+    "Power bank", "พาวเวอร์แบงค์"
 ]
 #["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง","powerbank", "eloop", "แบตเตอรี่สำรอง"]
+#"Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
+#  "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
 FILTER_KEYWORDS = [
     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
     "powerbank", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง", "power bank",
@@ -30,22 +31,21 @@ FILTER_KEYWORDS = [
 #k.lower() for k in KEYWORDS
 
 download_images = True  # Toggle this to True to download images
-CSV_FILE = "New_Scaping/marketplace_data.csv"
-SKIPPED_CSV = "New_Scaping/skipped_posts.csv"
-IMAGE_DIR = "New_Scaping/images"
-SCROLL_LIMIT = 15
+CSV_FILE = "Scrape_Data/marketplace_data.csv"
+SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
+IMAGE_DIR = "Scrape_Data/images"
+SCROLL_LIMIT = 3
 ZOOM_LEVEL = 0.5
-PROFILE_PATH = r"C:\\Users\\patza\\AppData\\Local\\Google\\Chrome\\User Data"
+PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project"
 PROFILE_NAME = "Profile 8"
 CHROMEDRIVER_PATH = r"C:\\Users\\patza\\chromedriver.exe"
 
 # ------------------------ SETUP ------------------------
 def setup_chrome():
-    os.system("taskkill /im chrome.exe /f")
+    os.system("taskkill /im chrome.exe /f") 
     options = webdriver.ChromeOptions()
     options.add_argument(f"--user-data-dir={PROFILE_PATH}")
     options.add_argument(f"--profile-directory={PROFILE_NAME}")
-    options.add_argument("--remote-debugging-port=9222")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
     options.add_argument("--force-device-scale-factor=" + str(ZOOM_LEVEL))
@@ -126,16 +126,16 @@ def scrape_post(driver, post_url):
     driver.get(post_url)
     time.sleep(3)
 
-    try:
+    try: 
         title_elem = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//span["
-                "contains(@class, 'x193iq5w') and contains(@class, 'xeuugli') and contains(@class, 'x13faqbe') and "
-                "contains(@class, 'x1vvkbs') and contains(@class, 'x1xmvt09') and contains(@class, 'x1lliihq') and "
-                "contains(@class, 'x1s928wv') and contains(@class, 'xhkezso') and contains(@class, 'x1gmr53x') and "
-                "contains(@class, 'x1cpjm7i') and contains(@class, 'x1fgarty') and contains(@class, 'x1943h6x') and "
-                "contains(@class, 'x14z4hjw') and contains(@class, 'x3x7a5m') and contains(@class, 'xngnso2') and "
-                "contains(@class, 'x1qb5hxa') and contains(@class, 'x1xlr1w8') and contains(@class, 'xzsf02u') and "
-                "not(contains(@class, 'x1yc453h'))]"))
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//div[contains(@class,'xyamay9')"
+                " and contains(@class,'xv54qhq')"
+                " and contains(@class,'x18d9i69')"
+                " and contains(@class,'xf7dkkf')]"
+                "//span[@dir='auto']"
+            ))
         )
         title = title_elem.text.strip()
         logging.info(f"📌 Title: {title}")
@@ -147,15 +147,15 @@ def scrape_post(driver, post_url):
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
     img_elements = driver.find_elements(By.XPATH,
-        "//div[contains(@class, 'x1ypdohk') and contains(@class, 'xc9qbxq') and contains(@class, 'x14qfxbe') and "
-        "contains(@class, 'xti2d7y') and contains(@class, 'x5z6fxw')]"
-        "//img[contains(@class, 'x1o1ewxj') and contains(@class, 'x3x9cwd') and contains(@class, 'x1e5q0jg') and "
-        "contains(@class, 'x13rtm0m') and contains(@class, 'x5yr21d') and contains(@class, 'xl1xv1r') and "
-        "contains(@class, 'xh8yej3')]"
-        " | "
-        "//span[@aria-hidden='true' and contains(@class, 'x78zum5') and contains(@class, 'x1vjfegm')]"
-        "//img[contains(@class, 'xz74otr') and contains(@class, 'x168nmei') and contains(@class, 'x13lgxp2') and "
-        "contains(@class, 'x5pf9jr') and contains(@class, 'xo71vjh')]"
+    # First path: span → img for post with single image
+    "//span[contains(@class, 'x78zum5') and contains(@class, 'x1vjfegm')]"
+    "//img[contains(@class, 'xz74otr') and contains(@class, 'x15mokao') and contains(@class, 'x1ga7v0g') and "
+    "contains(@class, 'x16uus16') and contains(@class, 'xbiv7yw')]"
+    " | "
+    # Second path: standalone img for post with multiple images
+    "//img[contains(@class, 'x1fmog5m') and contains(@class, 'xu25z0z') and contains(@class, 'x140muxe') and "
+    "contains(@class, 'xo1y3bh') and contains(@class, 'x5yr21d') and contains(@class, 'xl1xv1r') and "
+    "contains(@class, 'xh8yej3')]"
     )
 
     matched_urls = []
@@ -184,7 +184,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("New_Scaping/scraper_log.txt", mode='w', encoding="utf-8"),
+            logging.FileHandler("scraper_log.txt", mode='w', encoding="utf-8"),
             logging.StreamHandler()  # Console output
         ]
     )
