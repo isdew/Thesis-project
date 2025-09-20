@@ -1,4 +1,4 @@
-#branch: restructure-cleanup
+#branch: restructure-cleanup //Make a folder for overlay picture where locate TIS, QR. The downloading rn are duplicate x2, it download 2 times. direct picture with TIS and QR into itown folder for dataset and none too.
 import os
 import time
 import random
@@ -17,6 +17,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from collections import defaultdict
 from ultralytics import YOLO
+from selenium.webdriver import Chrome
+from selenium.webdriver.chrome.options import Options
+import subprocess
 
 # Load YOLOv11 model (replace with your correct path)
 TIS_model = YOLO(r"model\TIS.pt")
@@ -24,11 +27,11 @@ QR_model = YOLO(r"model\QR.pt")
 
 
 # ------------------------ CONFIG ------------------------
-KEYWORDS = [
-    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-    "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
-]
-#["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง","powerbank", "eloop", "แบตเตอรี่สำรอง"]
+# KEYWORDS = [
+#     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
+#     "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
+# ]
+KEYWORDS = ["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง","powerbank", "eloop", "แบตเตอรี่สำรอง"]
 FILTER_KEYWORDS = [
     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
     "powerbank", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง", "power bank",
@@ -38,32 +41,39 @@ FILTER_KEYWORDS = [
 
 download_images = True  # Toggle this to True to download images
 TIS_cf_threshold = 0.5  # Confidence threshold for TIS detection
-QR_cf_threshold = 0.5  # Confidence threshold for QR detection
+QR_cf_threshold = 0.5  # Confidence threshold for QR detection /use auto-threshold for future run
 CSV_FILE = "Scrape_Data/marketplace_data.csv"
 SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
 IMAGE_DIR = "Scrape_Data/images"
-SCROLL_LIMIT = 15
+SCROLL_LIMIT = 3 #15
 ZOOM_LEVEL = 0.5
-PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project"
+PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project\profile"
 PROFILE_NAME = "Profile 8"
 CHROMEDRIVER_PATH = r"C:\\Users\\patza\\chromedriver.exe"
 
 # ------------------------ SETUP ------------------------
 def setup_chrome():
-    os.system("taskkill /im chrome.exe /f") 
-    options = webdriver.ChromeOptions()
-    options.add_argument(f"--user-data-dir={PROFILE_PATH}")
-    options.add_argument(f"--profile-directory={PROFILE_NAME}")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--force-device-scale-factor=" + str(ZOOM_LEVEL))
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_experimental_option("detach", True)
+    # Try to close any running Chrome; ignore if not found
+    try:
+        subprocess.run(["taskkill", "/im", "chrome.exe", "/f"], check=False,
+                       capture_output=True, text=True)
+    except Exception:
+        pass
 
-    service = Service(executable_path=CHROMEDRIVER_PATH)
-    driver = webdriver.Chrome(service=service, options=options)
+    opts = Options()
+    opts.add_argument(f"--user-data-dir={PROFILE_PATH}")
+    opts.add_argument(f"--profile-directory={PROFILE_NAME}")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument(f"--force-device-scale-factor={ZOOM_LEVEL}")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_experimental_option("detach", True)
+
+    # No executable_path → Selenium Manager downloads the matching ChromeDriver 140
+    service = Service()
+    driver = Chrome(service=service, options=opts)
     driver.maximize_window()
     driver.get("https://www.facebook.com")
     return driver
@@ -227,6 +237,8 @@ def scrape_post(driver, post_url):
 
     # Determine overall TIS presence for the post (at least one image has TIS)
     tis_detected = any(tis_detection_results)
+    qr_detected = any(qr_detection_results)
+
 
     if matched_urls:
         row = [title, post_url, " | ".join(matched_urls), 
@@ -245,7 +257,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("New_Scaping/scraper_log.txt", mode='w', encoding="utf-8"),
+            logging.FileHandler("Result/scraper_log.txt", mode='w', encoding="utf-8"),
             logging.StreamHandler()  # Console output
         ]
     )
@@ -291,4 +303,3 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"❌ Failed to scrape {link}: {e}")
         time.sleep(random.uniform(2, 4))
-
