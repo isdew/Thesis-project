@@ -9,7 +9,7 @@ import logging
 import shutil
 import wget
 import hashlib
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -21,7 +21,6 @@ from ultralytics import YOLO
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 import subprocess
-from Module.product_config import ProductConfig
 
 # Load YOLOv11 model (replace with your correct path)
 TIS_model = YOLO(r"model\TIS.pt")
@@ -29,41 +28,47 @@ QR_model = YOLO(r"model\QR.pt")
 
 
 # ------------------------ CONFIG ------------------------
-# Load configuration
-config = ProductConfig()
+KEYWORDS = ["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง", "powerbank", "eloop", "แบตเตอรี่สำรอง"]
 
-# Select product (this will come from frontend later)
-SELECTED_PRODUCT = "power_bank"  # or "adapter", "usb_cable", etc.
+FILTER_KEYWORDS = [
+    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
+    "powerbank", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง", "power bank",
+    "พาวเวอเเบงค์", "เพาเวอร์แบงค์"
+]
 
-# Get keywords dynamically
-KEYWORDS = config.get_keywords(SELECTED_PRODUCT)
-FILTER_KEYWORDS = config.get_filter_keywords(SELECTED_PRODUCT)
-FILTER_KEYWORDS_LOWER = config.get_filter_keywords_lower(SELECTED_PRODUCT)
+FILTER_KEYWORDS_LOWER = {k.lower() for k in FILTER_KEYWORDS}
 
-# Create product-specific output directories
-PRODUCT_NAME = config.get_product_names()[SELECTED_PRODUCT]
-CSV_FILE = f"Scrape_Data/{SELECTED_PRODUCT}/marketplace_data.csv"
-SKIPPED_CSV = f"Scrape_Data/{SELECTED_PRODUCT}/skipped_posts.csv"
-IMAGE_DIR = f"Scrape_Data/{SELECTED_PRODUCT}/images"
+# ------------------------ LOCATION CONFIG ------------------------
+# Format: {"display_name": "marketplace_id_or_slug"}
+LOCATIONS = {
+    "Bangkok": "bangkok",
+    "Lampang": "104000039637634",
+    "Kalasin": "108002015886684",
+    "Surat Thani": "109390779087636",
+}
 
-# ------------------------ PARAMETERS ------------------------
+# Search radius in km (Facebook uses: 1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500)
+SEARCH_RADIUS_KM = 250
+
+# Set to None or empty dict to search default marketplace (no location filter)
+# LOCATIONS = None
 
 download_images = True  # Toggle this to True to download images
 TIS_cf_threshold = 0.5  # Confidence threshold for TIS detection
-QR_cf_threshold = 0.5  # Confidence threshold for QR detection /use auto-threshold for future run
+QR_cf_threshold = 0.5  # Confidence threshold for QR detection
 CSV_FILE = "Scrape_Data/marketplace_data.csv"
 SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
 IMAGE_DIR = "Scrape_Data/images"
-CATEGORY_ROOT = os.path.join(IMAGE_DIR, "categorized")  # Scrape_Data/  images/categorized
-SCROLL_LIMIT = 2 #15
+CATEGORY_ROOT = os.path.join(IMAGE_DIR, "categorized")
+SCROLL_LIMIT = 2  # 15
 ZOOM_LEVEL = 0.5
 PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project\profile"
 PROFILE_NAME = "Profile 8"
 CHROMEDRIVER_PATH = r"C:\\Users\\patza\\chromedriver.exe"
 
+
 # ------------------------ SETUP ------------------------
 def setup_chrome():
-    # Try to close any running Chrome; ignore if not found
     try:
         subprocess.run(["taskkill", "/im", "chrome.exe", "/f"], check=False,
                        capture_output=True, text=True)
@@ -81,12 +86,12 @@ def setup_chrome():
     opts.add_experimental_option("useAutomationExtension", False)
     opts.add_experimental_option("detach", True)
 
-    # No executable_path → Selenium Manager downloads the matching ChromeDriver 140
     service = Service()
     driver = Chrome(service=service, options=opts)
     driver.maximize_window()
     driver.get("https://www.facebook.com")
     return driver
+
 
 # ------------------------ HELPERS ------------------------
 def detect_tis_symbol(image_path):
@@ -96,12 +101,14 @@ def detect_tis_symbol(image_path):
     logging.info(f"{'🎯' if found else '❌'} TIS symbol {'detected' if found else 'not detected'} in {image_path}")
     return found
 
+
 def detect_qr_symbol(image_path):
     r = QR_model.predict(image_path, conf=QR_cf_threshold, verbose=False)[0]
     boxes = getattr(r, "boxes", None)
     found = boxes is not None and len(boxes) > 0
     logging.info(f"{'📷' if found else '❌'} QR code {'detected' if found else 'not detected'} in {image_path}")
     return found
+
 
 def save_csv_row(filename, row, header=None):
     file_exists = os.path.exists(filename)
@@ -111,6 +118,7 @@ def save_csv_row(filename, row, header=None):
             writer.writerow(header)
         writer.writerow(row)
 
+
 def normalize_text(text):
     if not text:
         return ""
@@ -119,60 +127,42 @@ def normalize_text(text):
     text = re.sub(r"\s+", ' ', text)
     return text.lower().strip()
 
+
 def sanitize_filename(title):
     return re.sub(r'[<>:"/\\|?*]', '_', title)
+
 
 def category_from_flags(tis_found: bool, qr_found: bool) -> str:
     """Two-bucket categorization."""
     return "has_mark" if (tis_found or qr_found) else "none"
 
-# If you prefer 4 buckets, use this instead:
-# def category_from_flags(tis_found: bool, qr_found: bool) -> str:
-#     if tis_found and qr_found: return "both"
-#     if tis_found: return "tis"
-#     if qr_found:  return "qr"
-#     return "none"
 
 def archive_to_category(local_path: str, category_root: str, category: str) -> str:
-    """
-    Copy the saved image into a category folder.
-    (Copy instead of move so the original master stays in IMAGE_DIR.)
-    """
     dest_dir = os.path.join(category_root, category)
     os.makedirs(dest_dir, exist_ok=True)
     dest_path = os.path.join(dest_dir, os.path.basename(local_path))
     if not os.path.exists(dest_path):
-        shutil.copy2(local_path, dest_path)  # preserve timestamps/metadata
+        shutil.copy2(local_path, dest_path)
     return dest_path
 
 
-# Global map so a URL is only downloaded once per run
-URL_TO_FILE = {}  # {image_url: local_file_path}
+URL_TO_FILE = {}
+
 
 def guess_ext_from_url(url: str) -> str:
-    """
-    Try to guess file extension from URL path; default to .jpg.
-    """
     path = unquote(urlparse(url).path)
     ext = (path.split('.')[-1].lower() if '.' in path else '')
     if ext in {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"}:
         return "." + ("jpg" if ext == "jpeg" else ext)
     return ".jpg"
 
+
 def filename_for_image(title: str, url: str) -> str:
-    """
-    Stable, de-duplicated filename using a hash of the URL + sanitized title.
-    Prevents multiple downloads of identical URLs.
-    """
     h = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
     return f"{sanitize_filename(title)}_{h}{guess_ext_from_url(url)}"
 
+
 def ensure_download(url: str, title: str, image_dir: str) -> str:
-    """
-    Download url -> local file once. Reuse on subsequent requests.
-    Returns local filepath.
-    """
-    # Reuse if downloaded already this run
     if url in URL_TO_FILE and os.path.exists(URL_TO_FILE[url]):
         return URL_TO_FILE[url]
     os.makedirs(image_dir, exist_ok=True)
@@ -185,15 +175,60 @@ def ensure_download(url: str, title: str, image_dir: str) -> str:
             raise
     URL_TO_FILE[url] = local_path
     return local_path
-# ------------------------ MAIN SCRAPER ------------------------
-def search_facebook(driver, query):
-    driver.get("https://www.facebook.com/marketplace")
-    time.sleep(5)
 
-    search_box = WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Search Marketplace']"))
-    )
-    search_box.send_keys(query + "\n")
+
+# ------------------------ MAIN SCRAPER ------------------------
+def build_search_url(query: str, location_id: str = None, radius_km: int = None) -> str:
+    """
+    Build Facebook Marketplace search URL with optional location and radius.
+    
+    Args:
+        query: Search keyword
+        location_id: Marketplace location ID or slug (e.g., "bangkok" or "104000039637634")
+        radius_km: Search radius in kilometers
+    
+    Returns:
+        Complete search URL
+    """
+    encoded_query = quote(query)
+    
+    if location_id:
+        # Location-specific search
+        base_url = f"https://www.facebook.com/marketplace/{location_id}/search/"
+    else:
+        # Default marketplace search
+        base_url = "https://www.facebook.com/marketplace/search/"
+    
+    # Build query parameters
+    params = [f"query={encoded_query}"]
+    
+    if radius_km:
+        # Facebook uses specific radius values, map to nearest
+        valid_radii = [1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500]
+        nearest_radius = min(valid_radii, key=lambda x: abs(x - radius_km))
+        params.append(f"radius={nearest_radius}")
+    
+    return f"{base_url}?{'&'.join(params)}"
+
+
+def search_facebook(driver, query, location_name=None, location_id=None):
+    """
+    Search Facebook Marketplace with optional location filtering.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        query: Search keyword
+        location_name: Display name of location (for logging)
+        location_id: Marketplace location ID or slug
+    """
+    # Build the search URL
+    search_url = build_search_url(query, location_id, SEARCH_RADIUS_KM)
+    
+    location_display = f" in {location_name}" if location_name else ""
+    logging.info(f"🔍 Searching for '{query}'{location_display}")
+    logging.info(f"📍 URL: {search_url}")
+    
+    driver.get(search_url)
     time.sleep(7)
 
     links = set()
@@ -211,23 +246,25 @@ def search_facebook(driver, query):
                 continue
 
             link = f"https://www.facebook.com{href.split('?')[0]}"
-            title_elem = item.find("div", class_="xyqdw3p xyri2b xjkvuk6 x1c1uobl") #class_="x1lliihq x6ikm8r x10wlt62 x1n2onr6"
+            title_elem = item.find("div", class_="xyqdw3p xyri2b xjkvuk6 x1c1uobl")
             raw_title = title_elem.get_text(strip=True) if title_elem else ""
-            title_norm = normalize_text(raw_title)  # lower+normalize here
+            title_norm = normalize_text(raw_title)
+            
             if title_norm and not any(k in title_norm for k in FILTER_KEYWORDS_LOWER):
-                skipped.add((title_norm, link))
+                skipped.add((title_norm, link, location_name or "Default"))
                 continue
             links.add(link)
 
         driver.execute_script("window.scrollBy(0, 1950);")
 
     for skip in skipped:
-        save_csv_row(SKIPPED_CSV, list(skip))
+        save_csv_row(SKIPPED_CSV, list(skip), header=["Title", "Link", "Location"])
 
-    logging.info(f"📊 Found: {len(links)} links, Skipped: {len(skipped)}")
+    logging.info(f"📊 Found: {len(links)} links, Skipped: {len(skipped)} (Location: {location_name or 'Default'})")
     return links, skipped
 
-def scrape_post(driver, post_url):
+
+def scrape_post(driver, post_url, location_name=None):
     driver.get(post_url)
     time.sleep(3)
 
@@ -244,8 +281,8 @@ def scrape_post(driver, post_url):
         )
         title = title_elem.text.strip()
         logging.info(f"📌 Title: {title}")
-        # ---- reliable post-page title filter ----// for extra caution, if no need can remove later.
-        title_norm = normalize_text(title)  # normalizes + lowercases
+        
+        title_norm = normalize_text(title)
         if title_norm and not any(k in title_norm for k in FILTER_KEYWORDS_LOWER):
             logging.info(f"⏭️ Skipped by post-page filter: {title}")
             return
@@ -258,15 +295,13 @@ def scrape_post(driver, post_url):
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
     img_elements = driver.find_elements(By.XPATH,
-    # First path: span → img for post with single image
-    "//span[contains(@class, 'x78zum5') and contains(@class, 'x1vjfegm')]"
-    "//img[contains(@class, 'xz74otr') and contains(@class, 'x15mokao') and contains(@class, 'x1ga7v0g') and "
-    "contains(@class, 'x16uus16') and contains(@class, 'xbiv7yw')]"
-    " | "
-    # Second path: standalone img for post with multiple images
-    "//img[contains(@class, 'x1fmog5m') and contains(@class, 'xu25z0z') and contains(@class, 'x140muxe') and "
-    "contains(@class, 'xo1y3bh') and contains(@class, 'x5yr21d') and contains(@class, 'xl1xv1r') and "
-    "contains(@class, 'xh8yej3')]"
+        "//span[contains(@class, 'x78zum5') and contains(@class, 'x1vjfegm')]"
+        "//img[contains(@class, 'xz74otr') and contains(@class, 'x15mokao') and contains(@class, 'x1ga7v0g') and "
+        "contains(@class, 'x16uus16') and contains(@class, 'xbiv7yw')]"
+        " | "
+        "//img[contains(@class, 'x1fmog5m') and contains(@class, 'xu25z0z') and contains(@class, 'x140muxe') and "
+        "contains(@class, 'xo1y3bh') and contains(@class, 'x5yr21d') and contains(@class, 'xl1xv1r') and "
+        "contains(@class, 'xh8yej3')]"
     )
 
     matched_urls = []
@@ -283,10 +318,8 @@ def scrape_post(driver, post_url):
         logging.info(f"✅ Collected Image URL: {url}")
 
         if download_images:
-            # PERMANENT mode (data gathering) + categorization
             local_path = ensure_download(url, title, IMAGE_DIR)
 
-            # detect
             try:
                 tis = detect_tis_symbol(local_path)
             except Exception as e:
@@ -301,15 +334,12 @@ def scrape_post(driver, post_url):
             tis_detection_results.append(tis)
             qr_detection_results.append(qr)
 
-            # categorize copy
             cat = category_from_flags(tis, qr)
             archived = archive_to_category(local_path, CATEGORY_ROOT, cat)
             logging.info(f"🗂️ Categorized -> {cat}: {archived}")
 
-
         else:
-            # TEMP mode (production): download -> detect -> delete
-            import tempfile, os
+            import tempfile
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
                 tmp_path = tf.name
             try:
@@ -332,32 +362,36 @@ def scrape_post(driver, post_url):
 
         time.sleep(random.uniform(0.4, 0.8))
 
-
-
-    # Determine overall TIS presence for the post (at least one image has TIS)
     tis_detected = any(tis_detection_results)
     qr_detected = any(qr_detection_results)
 
-
     if matched_urls:
-        row = [title, post_url, " | ".join(matched_urls), 
-       "Yes" if tis_detected else "No", 
-       "Yes" if qr_detected else "No"]
-        save_csv_row(CSV_FILE, row, header=["Title", "Post Link", "Photo Link", "TIS Detected", "QR Detected"])
-
-        logging.info(f"✅ Saved to CSV: {title} (TIS Detected: {'Yes' if tis_detected else 'No'})")
+        row = [
+            title, 
+            post_url, 
+            " | ".join(matched_urls), 
+            "Yes" if tis_detected else "No", 
+            "Yes" if qr_detected else "No",
+            location_name or "Default"  # Add location to CSV
+        ]
+        save_csv_row(
+            CSV_FILE, 
+            row, 
+            header=["Title", "Post Link", "Photo Link", "TIS Detected", "QR Detected", "Location"]
+        )
+        logging.info(f"✅ Saved to CSV: {title} (TIS: {'Yes' if tis_detected else 'No'}, Location: {location_name or 'Default'})")
     else:
         logging.warning("⚠ No images found.")
 
 
 # ------------------------ RUN ------------------------
 if __name__ == "__main__":
-    logging.basicConfig( #--------- LOGGER SETUP ------
+    logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler("Result/scraper_log.txt", mode='w', encoding="utf-8"),
-            logging.StreamHandler()  # Console output
+            logging.StreamHandler()
         ]
     )
 
@@ -365,44 +399,93 @@ if __name__ == "__main__":
     os.makedirs(IMAGE_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(CSV_FILE), exist_ok=True)
     os.makedirs(os.path.dirname(SKIPPED_CSV), exist_ok=True)
-    os.makedirs(os.path.dirname("Result/scraper_log.txt"), exist_ok=True)  # Result/
-    os.makedirs(CATEGORY_ROOT, exist_ok=True)   # for categorization
+    os.makedirs(os.path.dirname("Result/scraper_log.txt"), exist_ok=True)
+    os.makedirs(CATEGORY_ROOT, exist_ok=True)
 
-    all_links = set()
+    all_links = {}  # Changed to dict: {link: location_name}
     all_skipped = set()
-    keyword_summary = defaultdict(lambda: {'found': 0, 'skipped': 0})
+    keyword_location_summary = defaultdict(lambda: {'found': 0, 'skipped': 0})
 
-    for keyword in KEYWORDS:
-        found, skipped = search_facebook(driver, keyword)
-        all_links.update(found)
-        all_skipped.update(skipped)
-        keyword_summary[keyword]['found'] = len(found)
-        keyword_summary[keyword]['skipped'] = len(skipped)
+    # Determine locations to search
+    locations_to_search = LOCATIONS.items() if LOCATIONS else [(None, None)]
 
-    print("\n====================== FINAL SUMMARY ======================")
-    total_found = total_skipped = 0 #Still got duplicate between run
-    for keyword, counts in keyword_summary.items():
-        found = counts['found']
-        skipped = counts['skipped']
-        total_found += found
-        total_skipped += skipped
-        logging.info(f"🔍 Keyword: {keyword}")
-        logging.info(f"   ✅ Total Post Links Found: {found + skipped}")
-        logging.info(f"   📌 Total Unique Post Links Collected: {found}")
-        logging.info(f"   ❌ Total Skipped Post Links Collected: {skipped}\n")
+    logging.info("=" * 60)
+    logging.info("🚀 STARTING MULTI-LOCATION MARKETPLACE SCRAPER")
+    logging.info(f"📍 Locations: {list(LOCATIONS.keys()) if LOCATIONS else ['Default']}")
+    logging.info(f"🔎 Keywords: {KEYWORDS}")
+    logging.info(f"📏 Search Radius: {SEARCH_RADIUS_KM} km")
+    logging.info("=" * 60)
 
-    logging.info("📊 Overall Summary:")
-    logging.info(f"   ✅ Total Post Links Found (exclude duplicate): {len(all_links) + len(all_skipped)}")
-    logging.info(f"   📌 Total Unique Post Links Collected (exclude duplicate): {len(all_links)}")
-    logging.info(f"   ❌ Total Skipped Post Links Collected (exclude duplicate): {len(all_skipped)}")
-    logging.info("===========================================================\n")
+    # Loop through locations and keywords
+    for location_name, location_id in locations_to_search:
+        logging.info(f"\n{'=' * 40}")
+        logging.info(f"📍 SEARCHING LOCATION: {location_name or 'Default Marketplace'}")
+        logging.info(f"{'=' * 40}")
+        
+        for keyword in KEYWORDS:
+            summary_key = f"{keyword}|{location_name or 'Default'}"
+            
+            found, skipped = search_facebook(
+                driver, 
+                keyword, 
+                location_name=location_name, 
+                location_id=location_id
+            )
+            
+            # Track links with their location
+            for link in found:
+                if link not in all_links:
+                    all_links[link] = location_name or "Default"
+            
+            all_skipped.update(skipped)
+            keyword_location_summary[summary_key]['found'] = len(found)
+            keyword_location_summary[summary_key]['skipped'] = len(skipped)
+            
+            # Small delay between searches to avoid rate limiting
+            time.sleep(random.uniform(2, 4))
 
-    logging.info(f"✅ Total unique posts to scrape: {len(all_links)}")
+    # Print summary
+    print("\n" + "=" * 70)
+    print("                         FINAL SUMMARY")
+    print("=" * 70)
+    
+    # Summary by location
+    location_totals = defaultdict(lambda: {'found': 0, 'skipped': 0})
+    
+    for key, counts in keyword_location_summary.items():
+        keyword, location = key.split('|')
+        location_totals[location]['found'] += counts['found']
+        location_totals[location]['skipped'] += counts['skipped']
+        
+        logging.info(f"🔍 Keyword: {keyword} | Location: {location}")
+        logging.info(f"   ✅ Found: {counts['found']} | ❌ Skipped: {counts['skipped']}")
 
-    for idx, link in enumerate(all_links):
-        logging.info(f"📍 Scraping {idx+1}/{len(all_links)}: {link}")
+    print("\n" + "-" * 70)
+    print("SUMMARY BY LOCATION:")
+    print("-" * 70)
+    
+    for location, totals in location_totals.items():
+        logging.info(f"📍 {location}:")
+        logging.info(f"   ✅ Total Found: {totals['found']}")
+        logging.info(f"   ❌ Total Skipped: {totals['skipped']}")
+
+    print("\n" + "-" * 70)
+    print("OVERALL SUMMARY:")
+    print("-" * 70)
+    
+    logging.info(f"📊 Total Unique Posts to Scrape: {len(all_links)}")
+    logging.info(f"❌ Total Skipped Posts: {len(all_skipped)}")
+    logging.info("=" * 70 + "\n")
+
+    # Scrape all collected posts
+    logging.info(f"🚀 Starting to scrape {len(all_links)} unique posts...")
+    
+    for idx, (link, location) in enumerate(all_links.items()):
+        logging.info(f"📍 Scraping {idx + 1}/{len(all_links)}: {link} (from {location})")
         try:
-            scrape_post(driver, link)
+            scrape_post(driver, link, location_name=location)
         except Exception as e:
             logging.error(f"❌ Failed to scrape {link}: {e}")
         time.sleep(random.uniform(2, 4))
+
+    logging.info("\n✅ Scraping complete!")
