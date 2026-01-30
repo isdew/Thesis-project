@@ -21,22 +21,28 @@ from ultralytics import YOLO
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 import subprocess
+from Module.product_config import ProductConfig
 
 # Load YOLOv11 model (replace with your correct path)
 TIS_model = YOLO(r"model\TIS.pt")
 QR_model = YOLO(r"model\QR.pt")
 
 
-# ------------------------ CONFIG ------------------------
-KEYWORDS = ["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง", "powerbank", "eloop", "แบตเตอรี่สำรอง"]
+# ------------------------ PRODUCT CONFIG ------------------------
+# Load configuration
+config = ProductConfig()
 
-FILTER_KEYWORDS = [
-    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-    "powerbank", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง", "power bank",
-    "พาวเวอเเบงค์", "เพาเวอร์แบงค์"
-]
+# Select product (this will come from frontend later)
+SELECTED_PRODUCT = "power_bank"  # or "adapter", "usb_cable", etc.
 
-FILTER_KEYWORDS_LOWER = {k.lower() for k in FILTER_KEYWORDS}
+# Get keywords dynamically
+KEYWORDS = config.get_keywords(SELECTED_PRODUCT)
+FILTER_KEYWORDS = config.get_filter_keywords(SELECTED_PRODUCT)
+FILTER_KEYWORDS_LOWER = config.get_filter_keywords_lower(SELECTED_PRODUCT)
+
+# Get product display name
+PRODUCT_NAME = config.get_product_names()[SELECTED_PRODUCT]
+
 
 # ------------------------ LOCATION CONFIG ------------------------
 # Format: {"display_name": "marketplace_id_or_slug"}
@@ -53,13 +59,19 @@ SEARCH_RADIUS_KM = 250
 # Set to None or empty dict to search default marketplace (no location filter)
 # LOCATIONS = None
 
+
+# ------------------------ OUTPUT PATHS (Product-specific) ------------------------
+CSV_FILE = f"Scrape_Data/{SELECTED_PRODUCT}/marketplace_data.csv"
+SKIPPED_CSV = f"Scrape_Data/{SELECTED_PRODUCT}/skipped_posts.csv"
+IMAGE_DIR = f"Scrape_Data/{SELECTED_PRODUCT}/images"
+CATEGORY_ROOT = os.path.join(IMAGE_DIR, "categorized")
+LOG_FILE = f"Result/{SELECTED_PRODUCT}/scraper_log.txt"
+
+
+# ------------------------ PARAMETERS ------------------------
 download_images = True  # Toggle this to True to download images
 TIS_cf_threshold = 0.5  # Confidence threshold for TIS detection
 QR_cf_threshold = 0.5  # Confidence threshold for QR detection
-CSV_FILE = "Scrape_Data/marketplace_data.csv"
-SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
-IMAGE_DIR = "Scrape_Data/images"
-CATEGORY_ROOT = os.path.join(IMAGE_DIR, "categorized")
 SCROLL_LIMIT = 2  # 15
 ZOOM_LEVEL = 0.5
 PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project\profile"
@@ -193,17 +205,13 @@ def build_search_url(query: str, location_id: str = None, radius_km: int = None)
     encoded_query = quote(query)
     
     if location_id:
-        # Location-specific search
         base_url = f"https://www.facebook.com/marketplace/{location_id}/search/"
     else:
-        # Default marketplace search
         base_url = "https://www.facebook.com/marketplace/search/"
     
-    # Build query parameters
     params = [f"query={encoded_query}"]
     
     if radius_km:
-        # Facebook uses specific radius values, map to nearest
         valid_radii = [1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500]
         nearest_radius = min(valid_radii, key=lambda x: abs(x - radius_km))
         params.append(f"radius={nearest_radius}")
@@ -214,14 +222,7 @@ def build_search_url(query: str, location_id: str = None, radius_km: int = None)
 def search_facebook(driver, query, location_name=None, location_id=None):
     """
     Search Facebook Marketplace with optional location filtering.
-    
-    Args:
-        driver: Selenium WebDriver instance
-        query: Search keyword
-        location_name: Display name of location (for logging)
-        location_id: Marketplace location ID or slug
     """
-    # Build the search URL
     search_url = build_search_url(query, location_id, SEARCH_RADIUS_KM)
     
     location_display = f" in {location_name}" if location_name else ""
@@ -372,7 +373,7 @@ def scrape_post(driver, post_url, location_name=None):
             " | ".join(matched_urls), 
             "Yes" if tis_detected else "No", 
             "Yes" if qr_detected else "No",
-            location_name or "Default"  # Add location to CSV
+            location_name or "Default"
         ]
         save_csv_row(
             CSV_FILE, 
@@ -386,41 +387,49 @@ def scrape_post(driver, post_url, location_name=None):
 
 # ------------------------ RUN ------------------------
 if __name__ == "__main__":
+    # Create product-specific log directory
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("Result/scraper_log.txt", mode='w', encoding="utf-8"),
+            logging.FileHandler(LOG_FILE, mode='w', encoding="utf-8"),
             logging.StreamHandler()
         ]
     )
 
+    # Log startup info
+    logging.info("=" * 70)
+    logging.info("🚀 STARTING MULTI-LOCATION MARKETPLACE SCRAPER")
+    logging.info("=" * 70)
+    logging.info(f"📦 Product: {PRODUCT_NAME} ({SELECTED_PRODUCT})")
+    logging.info(f"📍 Locations: {list(LOCATIONS.keys()) if LOCATIONS else ['Default']}")
+    logging.info(f"🔎 Keywords: {KEYWORDS}")
+    logging.info(f"📏 Search Radius: {SEARCH_RADIUS_KM} km")
+    logging.info(f"📁 Output Directory: Scrape_Data/{SELECTED_PRODUCT}/")
+    logging.info("=" * 70)
+
     driver = setup_chrome()
+    
+    # Create all necessary directories
     os.makedirs(IMAGE_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(CSV_FILE), exist_ok=True)
     os.makedirs(os.path.dirname(SKIPPED_CSV), exist_ok=True)
-    os.makedirs(os.path.dirname("Result/scraper_log.txt"), exist_ok=True)
     os.makedirs(CATEGORY_ROOT, exist_ok=True)
 
-    all_links = {}  # Changed to dict: {link: location_name}
+    all_links = {}  # {link: location_name}
     all_skipped = set()
     keyword_location_summary = defaultdict(lambda: {'found': 0, 'skipped': 0})
 
     # Determine locations to search
     locations_to_search = LOCATIONS.items() if LOCATIONS else [(None, None)]
 
-    logging.info("=" * 60)
-    logging.info("🚀 STARTING MULTI-LOCATION MARKETPLACE SCRAPER")
-    logging.info(f"📍 Locations: {list(LOCATIONS.keys()) if LOCATIONS else ['Default']}")
-    logging.info(f"🔎 Keywords: {KEYWORDS}")
-    logging.info(f"📏 Search Radius: {SEARCH_RADIUS_KM} km")
-    logging.info("=" * 60)
-
     # Loop through locations and keywords
     for location_name, location_id in locations_to_search:
-        logging.info(f"\n{'=' * 40}")
+        logging.info(f"\n{'=' * 50}")
         logging.info(f"📍 SEARCHING LOCATION: {location_name or 'Default Marketplace'}")
-        logging.info(f"{'=' * 40}")
+        logging.info(f"{'=' * 50}")
         
         for keyword in KEYWORDS:
             summary_key = f"{keyword}|{location_name or 'Default'}"
@@ -432,7 +441,7 @@ if __name__ == "__main__":
                 location_id=location_id
             )
             
-            # Track links with their location
+            # Track links with their location (avoid duplicates)
             for link in found:
                 if link not in all_links:
                     all_links[link] = location_name or "Default"
@@ -441,12 +450,11 @@ if __name__ == "__main__":
             keyword_location_summary[summary_key]['found'] = len(found)
             keyword_location_summary[summary_key]['skipped'] = len(skipped)
             
-            # Small delay between searches to avoid rate limiting
             time.sleep(random.uniform(2, 4))
 
     # Print summary
     print("\n" + "=" * 70)
-    print("                         FINAL SUMMARY")
+    print(f"              FINAL SUMMARY - {PRODUCT_NAME}")
     print("=" * 70)
     
     # Summary by location
@@ -473,6 +481,7 @@ if __name__ == "__main__":
     print("OVERALL SUMMARY:")
     print("-" * 70)
     
+    logging.info(f"📦 Product: {PRODUCT_NAME}")
     logging.info(f"📊 Total Unique Posts to Scrape: {len(all_links)}")
     logging.info(f"❌ Total Skipped Posts: {len(all_skipped)}")
     logging.info("=" * 70 + "\n")
@@ -488,4 +497,5 @@ if __name__ == "__main__":
             logging.error(f"❌ Failed to scrape {link}: {e}")
         time.sleep(random.uniform(2, 4))
 
-    logging.info("\n✅ Scraping complete!")
+    logging.info(f"\n✅ Scraping complete for {PRODUCT_NAME}!")
+    logging.info(f"📁 Results saved to: Scrape_Data/{SELECTED_PRODUCT}/")
