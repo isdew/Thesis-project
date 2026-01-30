@@ -6,9 +6,10 @@ import csv
 import re
 import unicodedata
 import logging
-import requests
 import shutil
 import wget
+import hashlib
+from urllib.parse import urlparse, unquote
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -20,6 +21,7 @@ from ultralytics import YOLO
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.options import Options
 import subprocess
+from Module.product_config import ProductConfig
 
 # Load YOLOv11 model (replace with your correct path)
 TIS_model = YOLO(r"model\TIS.pt")
@@ -27,17 +29,24 @@ QR_model = YOLO(r"model\QR.pt")
 
 
 # ------------------------ CONFIG ------------------------
-# KEYWORDS = [
-#     "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-#     "powerbank", "eloop", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง"
-# ]
-KEYWORDS = ["Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง","powerbank", "eloop", "แบตเตอรี่สำรอง"]
-FILTER_KEYWORDS = [
-    "Power bank", "พาวเวอร์แบงค์", "PowerBank", "แบตสำรอง",
-    "powerbank", "แบตเตอรี่สำรอง", "เพาเวอร์แบงก์", "พาวเวอร์เเบง", "power bank",
-    "พาวเวอเเบงค์", "เพาเวอร์แบงค์"
-]
-#k.lower() for k in KEYWORDS
+# Load configuration
+config = ProductConfig()
+
+# Select product (this will come from frontend later)
+SELECTED_PRODUCT = "power_bank"  # or "adapter", "usb_cable", etc.
+
+# Get keywords dynamically
+KEYWORDS = config.get_keywords(SELECTED_PRODUCT)
+FILTER_KEYWORDS = config.get_filter_keywords(SELECTED_PRODUCT)
+FILTER_KEYWORDS_LOWER = config.get_filter_keywords_lower(SELECTED_PRODUCT)
+
+# Create product-specific output directories
+PRODUCT_NAME = config.get_product_names()[SELECTED_PRODUCT]
+CSV_FILE = f"Scrape_Data/{SELECTED_PRODUCT}/marketplace_data.csv"
+SKIPPED_CSV = f"Scrape_Data/{SELECTED_PRODUCT}/skipped_posts.csv"
+IMAGE_DIR = f"Scrape_Data/{SELECTED_PRODUCT}/images"
+
+# ------------------------ PARAMETERS ------------------------
 
 download_images = True  # Toggle this to True to download images
 TIS_cf_threshold = 0.5  # Confidence threshold for TIS detection
@@ -45,7 +54,8 @@ QR_cf_threshold = 0.5  # Confidence threshold for QR detection /use auto-thresho
 CSV_FILE = "Scrape_Data/marketplace_data.csv"
 SKIPPED_CSV = "Scrape_Data/skipped_posts.csv"
 IMAGE_DIR = "Scrape_Data/images"
-SCROLL_LIMIT = 3 #15
+CATEGORY_ROOT = os.path.join(IMAGE_DIR, "categorized")  # Scrape_Data/  images/categorized
+SCROLL_LIMIT = 2 #15
 ZOOM_LEVEL = 0.5
 PROFILE_PATH = r"C:\Users\patza\Desktop\Capstone_Project\profile"
 PROFILE_NAME = "Profile 8"
@@ -80,26 +90,18 @@ def setup_chrome():
 
 # ------------------------ HELPERS ------------------------
 def detect_tis_symbol(image_path):
-    results = TIS_model.predict(image_path, conf=TIS_cf_threshold)  # Confidence threshold for TIS detection)  # Confidence threshold adjust if needed
-    detections = results[0].boxes.xyxy  # Bounding boxes format (x1, y1, x2, y2)
-    
-    if len(detections) > 0:
-        logging.info(f"🎯 TIS symbol detected in {image_path}")
-        return True
-    else:
-        logging.info(f"❌ No TIS symbol detected in {image_path}")
-        return False
-    
-def detect_qr_symbol(image_path):
-    results = QR_model.predict(image_path, conf=QR_cf_threshold)
-    detections = results[0].boxes.xyxy
-    if len(detections) > 0:
-        logging.info(f"📷 QR code detected in {image_path}")
-        return True
-    else:
-        logging.info(f"❌ No QR code detected in {image_path}")
-        return False
+    r = TIS_model.predict(image_path, conf=TIS_cf_threshold, verbose=False)[0]
+    boxes = getattr(r, "boxes", None)
+    found = boxes is not None and len(boxes) > 0
+    logging.info(f"{'🎯' if found else '❌'} TIS symbol {'detected' if found else 'not detected'} in {image_path}")
+    return found
 
+def detect_qr_symbol(image_path):
+    r = QR_model.predict(image_path, conf=QR_cf_threshold, verbose=False)[0]
+    boxes = getattr(r, "boxes", None)
+    found = boxes is not None and len(boxes) > 0
+    logging.info(f"{'📷' if found else '❌'} QR code {'detected' if found else 'not detected'} in {image_path}")
+    return found
 
 def save_csv_row(filename, row, header=None):
     file_exists = os.path.exists(filename)
@@ -120,6 +122,69 @@ def normalize_text(text):
 def sanitize_filename(title):
     return re.sub(r'[<>:"/\\|?*]', '_', title)
 
+def category_from_flags(tis_found: bool, qr_found: bool) -> str:
+    """Two-bucket categorization."""
+    return "has_mark" if (tis_found or qr_found) else "none"
+
+# If you prefer 4 buckets, use this instead:
+# def category_from_flags(tis_found: bool, qr_found: bool) -> str:
+#     if tis_found and qr_found: return "both"
+#     if tis_found: return "tis"
+#     if qr_found:  return "qr"
+#     return "none"
+
+def archive_to_category(local_path: str, category_root: str, category: str) -> str:
+    """
+    Copy the saved image into a category folder.
+    (Copy instead of move so the original master stays in IMAGE_DIR.)
+    """
+    dest_dir = os.path.join(category_root, category)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, os.path.basename(local_path))
+    if not os.path.exists(dest_path):
+        shutil.copy2(local_path, dest_path)  # preserve timestamps/metadata
+    return dest_path
+
+
+# Global map so a URL is only downloaded once per run
+URL_TO_FILE = {}  # {image_url: local_file_path}
+
+def guess_ext_from_url(url: str) -> str:
+    """
+    Try to guess file extension from URL path; default to .jpg.
+    """
+    path = unquote(urlparse(url).path)
+    ext = (path.split('.')[-1].lower() if '.' in path else '')
+    if ext in {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"}:
+        return "." + ("jpg" if ext == "jpeg" else ext)
+    return ".jpg"
+
+def filename_for_image(title: str, url: str) -> str:
+    """
+    Stable, de-duplicated filename using a hash of the URL + sanitized title.
+    Prevents multiple downloads of identical URLs.
+    """
+    h = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
+    return f"{sanitize_filename(title)}_{h}{guess_ext_from_url(url)}"
+
+def ensure_download(url: str, title: str, image_dir: str) -> str:
+    """
+    Download url -> local file once. Reuse on subsequent requests.
+    Returns local filepath.
+    """
+    # Reuse if downloaded already this run
+    if url in URL_TO_FILE and os.path.exists(URL_TO_FILE[url]):
+        return URL_TO_FILE[url]
+    os.makedirs(image_dir, exist_ok=True)
+    local_path = os.path.join(image_dir, filename_for_image(title, url))
+    if not os.path.exists(local_path):
+        try:
+            wget.download(url, local_path, bar=None)
+        except Exception as e:
+            logging.warning(f"⚠ Download failed for {url}: {e}")
+            raise
+    URL_TO_FILE[url] = local_path
+    return local_path
 # ------------------------ MAIN SCRAPER ------------------------
 def search_facebook(driver, query):
     driver.get("https://www.facebook.com/marketplace")
@@ -146,11 +211,11 @@ def search_facebook(driver, query):
                 continue
 
             link = f"https://www.facebook.com{href.split('?')[0]}"
-            title_elem = item.find("span", class_="x1lliihq x6ikm8r x10wlt62 x1n2onr6")
-            title = title_elem.text.strip().lower() if title_elem else ""
-
-            if title and not any(k in title for k in FILTER_KEYWORDS):
-                skipped.add((title, link))
+            title_elem = item.find("div", class_="xyqdw3p xyri2b xjkvuk6 x1c1uobl") #class_="x1lliihq x6ikm8r x10wlt62 x1n2onr6"
+            raw_title = title_elem.get_text(strip=True) if title_elem else ""
+            title_norm = normalize_text(raw_title)  # lower+normalize here
+            if title_norm and not any(k in title_norm for k in FILTER_KEYWORDS_LOWER):
+                skipped.add((title_norm, link))
                 continue
             links.add(link)
 
@@ -179,6 +244,12 @@ def scrape_post(driver, post_url):
         )
         title = title_elem.text.strip()
         logging.info(f"📌 Title: {title}")
+        # ---- reliable post-page title filter ----// for extra caution, if no need can remove later.
+        title_norm = normalize_text(title)  # normalizes + lowercases
+        if title_norm and not any(k in title_norm for k in FILTER_KEYWORDS_LOWER):
+            logging.info(f"⏭️ Skipped by post-page filter: {title}")
+            return
+
     except:
         logging.warning("⚠ Title not found.")
         return
@@ -201,38 +272,66 @@ def scrape_post(driver, post_url):
     matched_urls = []
     tis_detection_results = []
     qr_detection_results = []
+    seen_src = set()
 
     for img in img_elements:
         url = img.get_attribute("src")
-        if url:
-            matched_urls.append(url)
-            logging.info(f"✅ Collected Image URL: {url}")
-            
-            # 🔵 Always temporary download for detection
-            temp_filename = os.path.join(IMAGE_DIR, f"temp_{int(time.time())}.jpg")
-            wget.download(url, temp_filename, bar=None)  # Turn off progress bar for speed
-            
-            # 🛠 Detect TIS symbol
-            tis_found = detect_tis_symbol(temp_filename)
-            tis_detection_results.append(tis_found)
+        if not url or url in seen_src:
+            continue
+        seen_src.add(url)
+        matched_urls.append(url)
+        logging.info(f"✅ Collected Image URL: {url}")
 
-            qr_found = detect_qr_symbol(temp_filename)
-            qr_detection_results.append(qr_found)
+        if download_images:
+            # PERMANENT mode (data gathering) + categorization
+            local_path = ensure_download(url, title, IMAGE_DIR)
 
-            tis_detected = any(tis_detection_results)
-            qr_detected = any(qr_detection_results)
+            # detect
+            try:
+                tis = detect_tis_symbol(local_path)
+            except Exception as e:
+                logging.warning(f"⚠ TIS detection failed on {local_path}: {e}")
+                tis = False
+            try:
+                qr = detect_qr_symbol(local_path)
+            except Exception as e:
+                logging.warning(f"⚠ QR detection failed on {local_path}: {e}")
+                qr = False
 
-            
-            # 📦 If user wants to save images permanently
-            if download_images:
-                permanent_filename = os.path.join(IMAGE_DIR, f"{sanitize_filename(title)}_{int(time.time())}.jpg")
-                shutil.move(temp_filename, permanent_filename)
-                logging.info(f"📸 Saved permanent image: {permanent_filename}")
-            else:
-                os.remove(temp_filename)
-                logging.info(f"🗑️ Deleted temporary file: {temp_filename}")
-            
-            time.sleep(random.uniform(1, 2))
+            tis_detection_results.append(tis)
+            qr_detection_results.append(qr)
+
+            # categorize copy
+            cat = category_from_flags(tis, qr)
+            archived = archive_to_category(local_path, CATEGORY_ROOT, cat)
+            logging.info(f"🗂️ Categorized -> {cat}: {archived}")
+
+
+        else:
+            # TEMP mode (production): download -> detect -> delete
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                tmp_path = tf.name
+            try:
+                wget.download(url, tmp_path, bar=None)
+                try:
+                    tis_detection_results.append(detect_tis_symbol(tmp_path))
+                except Exception as e:
+                    logging.warning(f"⚠ TIS detection failed on temp: {e}")
+                    tis_detection_results.append(False)
+                try:
+                    qr_detection_results.append(detect_qr_symbol(tmp_path))
+                except Exception as e:
+                    logging.warning(f"⚠ QR detection failed on temp: {e}")
+                    qr_detection_results.append(False)
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        time.sleep(random.uniform(0.4, 0.8))
+
 
 
     # Determine overall TIS presence for the post (at least one image has TIS)
@@ -264,6 +363,10 @@ if __name__ == "__main__":
 
     driver = setup_chrome()
     os.makedirs(IMAGE_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(CSV_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(SKIPPED_CSV), exist_ok=True)
+    os.makedirs(os.path.dirname("Result/scraper_log.txt"), exist_ok=True)  # Result/
+    os.makedirs(CATEGORY_ROOT, exist_ok=True)   # for categorization
 
     all_links = set()
     all_skipped = set()

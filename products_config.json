@@ -1,0 +1,68 @@
+{
+  "products": {
+    "power_bank": {
+      "display_name": "Power Bank",
+      "keywords": [
+        "Power bank",
+        "พาวเวอร์แบงค์",
+        "PowerBank",
+        "แบตสำรอง",
+        "powerbank",
+        "eloop",
+        "แบตเตอรี่สำรอง"
+      ],
+      "filter_keywords": [
+        "Power bank",
+        "พาวเวอร์แบงค์",
+        "PowerBank",
+        "แบตสำรอง",
+        "powerbank",
+        "แบตเตอรี่สำรอง",
+        "เพาเวอร์แบงก์",
+        "พาวเวอร์เเบง",
+        "power bank",
+        "พาวเวอเเบงค์",
+        "เพาเวอร์แบงค์"
+      ]
+    },
+    "extinguisher": {
+      "display_name": "extinguisher",
+      "keywords": [
+        "extinguisher"
+      ],
+      "filter_keywords": [
+        "extinguisher"
+      ]
+    },
+    "helmet": {
+      "display_name": "Helmet",
+      "keywords": [
+        "Helmet",
+        "หมวกกันน็อค"
+      ],
+      "filter_keywords": [
+        "Helmet",
+        "หมวกกันน็อค"
+      ]
+    },
+    "Insulating glass": {
+      "display_name": "Insulating glass",
+      "keywords": [
+        "Insulating glass",
+        "กระจกตัวเดียว",
+        "double glazing",
+        "double glass"
+      ],
+      "filter_keywords": [
+        "Insulating glass",
+        "กระจกตัวเดียว",
+        "double glazing",
+        "double glass"
+      ]
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "description": "Product configuration for TIS certification scraper"
+  }
+}

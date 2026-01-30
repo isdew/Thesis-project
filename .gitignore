@@ -3,3 +3,16 @@ Git_Capstone/
 Scrape_Data/
 scraper_log.txt
 Result/
+Tester/
+Data/
+All_Saved/
+Testing_Main.py
+Title_grapper.py
+Scrape_TIS.py
+Only_Scrape.py
+Version/
+main_prototype.py
+__pycache__/
+TempData/
+Dump/
+
